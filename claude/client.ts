@@ -4,6 +4,22 @@ import type { AskUserQuestionInput, AskUserCallback } from "./user-question.ts";
 import type { PermissionRequestCallback } from "./permission-request.ts";
 import * as path from "https://deno.land/std@0.208.0/path/mod.ts";
 
+// Expand ${VAR} and ${VAR:-default} placeholders in MCP env values from the
+// process environment. Lets .claude/mcp.json reference secrets (e.g. a Notion
+// token injected via the Deployment) without committing them to the repo.
+function expandEnvPlaceholders(env: Record<string, unknown>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    out[key] = typeof value === "string"
+      ? value.replace(
+        /\$\{(\w+)(?::-([^}]*))?\}/g,
+        (_match, name: string, fallback?: string) => Deno.env.get(name) ?? fallback ?? "",
+      )
+      : String(value);
+  }
+  return out;
+}
+
 // Load MCP server configs from .claude/mcp.json
 async function loadMcpServers(workDir: string): Promise<Record<string, McpServerConfig> | undefined> {
   try {
@@ -26,7 +42,7 @@ async function loadMcpServers(workDir: string): Promise<Record<string, McpServer
         type: "stdio" as const,
         command: raw.command,
         ...(args && { args }),
-        ...(raw.env && { env: raw.env }),
+        ...(raw.env && { env: expandEnvPlaceholders(raw.env) }),
       };
     }
     console.log(`[MCP] Loaded ${Object.keys(result).length} MCP server(s): ${Object.keys(result).join(", ")}`);
