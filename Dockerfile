@@ -30,6 +30,16 @@ RUN npm install -g @anthropic-ai/claude-code && \
 # Verify claude binary is accessible
 RUN claude --version
 
+# kubectl (read-only homelab diagnostics for the homelab-kubernetes subagent) and
+# gh (PR creation for homelab-developer). Image is linux/arm64.
+RUN curl -fsSL -o /usr/local/bin/kubectl "https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable.txt)/bin/linux/arm64/kubectl" && \
+    chmod +x /usr/local/bin/kubectl && \
+    GH_VER=$(curl -fsSL https://api.github.com/repos/cli/cli/releases/latest | grep '"tag_name"' | head -1 | sed -E 's/.*"v([^"]+)".*/\1/') && \
+    curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VER}/gh_${GH_VER}_linux_arm64.tar.gz" | tar -xz -C /tmp && \
+    mv "/tmp/gh_${GH_VER}_linux_arm64/bin/gh" /usr/local/bin/gh && \
+    rm -rf /tmp/gh_* && \
+    kubectl version --client && gh --version
+
 # Copy all source files (as root)
 COPY . .
 
