@@ -241,7 +241,7 @@ export const EFFORT_LEVELS = {
 export const OPERATION_MODES = {
   'normal': {
     name: 'Normal Mode',
-    description: 'Auto-accepts edits, asks before risky operations (recommended for Discord)',
+    description: 'Autonomous — runs tools without asking (except any in CONFIRM_TOOLS). Recommended.',
     permissionMode: 'acceptEdits' as const,
     riskLevel: 'low'
   },

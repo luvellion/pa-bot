@@ -278,7 +278,8 @@ export async function sendToClaudeCode(
           // Permission / tool-use callback — handles:
           //   1. AskUserQuestion tool → routes to onAskUser callback for interactive Discord flow
           //   2. MCP tools → auto-allow tools from configured servers
-          //   3. Everything else → deny (dontAsk mode blocks unapproved tools)
+          //   3. Autonomy (non-plan) → auto-allow unless the tool is in CONFIRM_TOOLS
+          //   4. CONFIRM_TOOLS / plan → Discord Allow-Deny prompt, else deny
           // NOTE: The SDK's runtime Zod schema requires `updatedInput` on allow responses
           // even though the TypeScript types mark it optional — pass through original input.
           canUseTool: async (toolName: string, input: Record<string, unknown>) => {
@@ -303,6 +304,20 @@ export async function sendToClaudeCode(
             // MCP tools: auto-allow tools from configured servers
             if (mcpToolPrefixes.some(prefix => toolName.startsWith(prefix))) {
               return { behavior: 'allow' as const, updatedInput: input };
+            }
+
+            // Autonomy: the bot runs unattended-ish and is trusted (read-only
+            // cluster RBAC, git-backed workspace), so by default it uses tools
+            // without asking. Only tools named in CONFIRM_TOOLS (comma-separated
+            // env) still raise a Discord Allow/Deny prompt. Plan mode is exempt —
+            // it stays analysis-only. Set CONFIRM_TOOLS to e.g. "Bash" to be
+            // selective, or leave empty for full autonomy.
+            if (permMode !== 'plan') {
+              const confirmTools = (Deno.env.get("CONFIRM_TOOLS") || "")
+                .split(",").map((t) => t.trim()).filter(Boolean);
+              if (!confirmTools.includes(toolName)) {
+                return { behavior: 'allow' as const, updatedInput: input };
+              }
             }
 
             // Interactive permission request — show Discord buttons for Allow/Deny
