@@ -292,10 +292,14 @@ export async function createClaudeCodeBot(config: BotConfig) {
     onContinueSession: async (ctx) => {
       await allHandlers.claude.onContinue(ctx);
     },
-    // Natural-language message → same path as /claude (auto-resumes the
-    // session active in this channel/thread, or starts a new one).
-    onNaturalMessage: async (ctx, prompt, channelId) => {
-      await allHandlers.claude.onClaude(ctx, prompt, channelId);
+    // Natural-language message → same path as /claude (auto-resumes the session
+    // active in this channel/thread). Bind the streaming sender to the exact
+    // channel/thread the message arrived in, so replies land there — including
+    // resumed threads after a restart (fixes replies leaking to the main channel).
+    onNaturalMessage: async (ctx, prompt, channelId, channel) => {
+      // deno-lint-ignore no-explicit-any
+      const sender = createClaudeSender(createChannelSenderAdapter(channel as any));
+      await allHandlers.claude.onClaude(ctx, prompt, channelId, undefined, sender);
     },
     ...(monitorChannelId && monitorBotIds?.length && {
       monitorConfig: {

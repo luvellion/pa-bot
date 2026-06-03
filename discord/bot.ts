@@ -337,7 +337,7 @@ export async function createDiscordBot(
         if (!hasPermission(ctx)) continue;
         const prompt = unanswered.map((m) => m.content.trim()).join("\n");
         console.log(`[Catch-up] Handling ${unanswered.length} missed message(s) in channel ${ch.id}`);
-        await dependencies.onNaturalMessage(ctx, prompt, ch.id);
+        await dependencies.onNaturalMessage(ctx, prompt, ch.id, ch);
       } catch (error) {
         console.error("[Catch-up] Error scanning channel:", error);
       }
@@ -673,7 +673,7 @@ export async function createDiscordBot(
       }
 
       try {
-        await dependencies.onNaturalMessage!(ctx, content, message.channelId);
+        await dependencies.onNaturalMessage!(ctx, content, message.channelId, message.channel);
       } catch (error) {
         console.error("Error handling natural message:", error);
       }

@@ -132,5 +132,5 @@ export interface BotDependencies {
    * it to Claude — enables natural conversation without `/claude`. The ctx is a
    * message-backed InteractionContext; channelId selects/continues the session.
    */
-  onNaturalMessage?: (ctx: InteractionContext, prompt: string, channelId: string) => Promise<void>;
+  onNaturalMessage?: (ctx: InteractionContext, prompt: string, channelId: string, channel: unknown) => Promise<void>;
 }

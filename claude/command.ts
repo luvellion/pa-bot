@@ -101,7 +101,7 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
      * current channel/thread. Starts a new session only if there isn't one yet.
      */
     // deno-lint-ignore no-explicit-any
-    async onClaude(ctx: any, prompt: string, channelId: string, explicitSessionId?: string): Promise<ClaudeResponse> {
+    async onClaude(ctx: any, prompt: string, channelId: string, explicitSessionId?: string, overrideSender?: (messages: ClaudeMessage[]) => Promise<void>): Promise<ClaudeResponse> {
       const existingController = deps.getClaudeController();
       if (existingController) {
         existingController.abort();
@@ -118,9 +118,12 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
       // 3) None → start a new session
       const activeSessionId = explicitSessionId || deps.getSessionForChannel(channelId);
 
-      // Pick the right sender — if this channel has a thread, use it
-      let activeSender = sendClaudeMessages;
-      if (activeSessionId && deps.sessionThreads) {
+      // Pick the right sender. An explicit overrideSender (e.g. from a natural
+      // message) targets the exact channel/thread the request arrived in — robust
+      // across restarts, unlike the in-memory session→thread map (which is empty
+      // after a restart and never set for threads not created via /claude-thread).
+      let activeSender = overrideSender || sendClaudeMessages;
+      if (!overrideSender && activeSessionId && deps.sessionThreads) {
         try {
           const existing = await deps.sessionThreads.getThreadSender(activeSessionId);
           if (existing) {
