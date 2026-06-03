@@ -20,7 +20,7 @@ import { sanitizeChannelName } from "./utils.ts";
 import { handlePaginationInteraction } from "./pagination.ts";
 import { checkCommandPermission, hasPermission } from "../core/rbac.ts";
 import { SETTINGS_ACTIONS, SETTINGS_VALUES } from "../settings/unified-settings.ts";
-import { BOT_VERSION } from "../util/version-check.ts";
+import { getShortCommit } from "../util/version-check.ts";
 import type {
   BotConfig,
   CommandHandlers,
@@ -618,10 +618,11 @@ export async function createDiscordBot(
       // before the startup embed, so it doesn't become the "last message".
       await catchUpMissedMessages();
 
+      const buildCommit = await getShortCommit();
       await myChannel.send(convertMessageContent({
         embeds: [{
           color: 0x00ff00,
-          title: `🚀 v${BOT_VERSION} — Startup Complete`,
+          title: `🚀 Startup Complete — \`${buildCommit}\``,
           description: `Claude Code bot for branch ${branchName} has started`,
           fields: [
             { name: 'Category', value: actualCategoryName, inline: true },

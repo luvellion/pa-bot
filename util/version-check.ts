@@ -46,6 +46,23 @@ async function getLocalCommit(): Promise<string> {
 }
 
 /**
+ * Short build commit (git rev-parse --short HEAD) — we ship per-commit, not per
+ * tag, so this identifies the running build. Falls back to "unknown".
+ */
+export async function getShortCommit(): Promise<string> {
+  try {
+    const cmd = new Deno.Command("git", {
+      args: ["rev-parse", "--short", "HEAD"],
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const output = await cmd.output();
+    if (output.success) return new TextDecoder().decode(output.stdout).trim();
+  } catch { /* ignore — not a git checkout */ }
+  return "unknown";
+}
+
+/**
  * Get the latest commit hash from GitHub API.
  */
 async function getRemoteCommit(): Promise<string> {
