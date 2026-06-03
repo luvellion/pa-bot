@@ -270,6 +270,11 @@ export async function sendToClaudeCode(
           ...(modelOptions?.outputFormat && { outputFormat: modelOptions.outputFormat }),
           // MCP servers from .claude/mcp.json
           ...(mcpServers && { mcpServers }),
+          // Pre-approve MCP tools so the agent can call them. allowedTools is
+          // additive (verified — it doesn't restrict builtin tools); needed
+          // because the canUseTool auto-allow below isn't honoured for MCP tools
+          // under acceptEdits mode. e.g. "mcp__google-calendar" allows all its tools.
+          ...(mcpToolPrefixes.length > 0 && { allowedTools: mcpToolPrefixes.map((p) => p.replace(/__$/, "")) }),
           // Permission / tool-use callback — handles:
           //   1. AskUserQuestion tool → routes to onAskUser callback for interactive Discord flow
           //   2. MCP tools → auto-allow tools from configured servers
