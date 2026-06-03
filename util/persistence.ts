@@ -229,6 +229,19 @@ export function getAgentSessionsManager(dataDir?: string): PersistenceManager<Ag
   return agentSessionsManager;
 }
 
+let channelSessionsManager: PersistenceManager<Record<string, string>> | null = null;
+
+/**
+ * Get or create the channel→session persistence manager. Persists the
+ * `channelId → Claude sessionId` map so conversations resume across restarts.
+ */
+export function getChannelSessionsManager(dataDir?: string): PersistenceManager<Record<string, string>> {
+  if (!channelSessionsManager) {
+    channelSessionsManager = new PersistenceManager<Record<string, string>>("channel-sessions", { dataDir });
+  }
+  return channelSessionsManager;
+}
+
 /**
  * Initialize all persistence managers
  */

@@ -22,6 +22,7 @@ import { unifiedSettingsCommands, createUnifiedSettingsHandlers, type UnifiedBot
 import { gitCommands, createGitHandlers } from "../git/index.ts";
 import { shellCommands, createShellHandlers } from "../shell/index.ts";
 import { utilsCommands, createUtilsHandlers } from "../util/index.ts";
+import { getChannelSessionsManager } from "../util/persistence.ts";
 import { systemCommands, createSystemHandlers } from "../system/index.ts";
 import { helpCommand, createHelpHandlers } from "../help/index.ts";
 import { agentCommand, createAgentHandlers } from "../agent/index.ts";
@@ -507,8 +508,18 @@ export function createAllHandlers(
     return opts;
   }
 
-  // Per-channel session tracking — maps channelId/threadId to active sessionId
+  // Per-channel session tracking — maps channelId/threadId to active sessionId.
+  // Persisted to .bot-data so conversations resume across pod restarts.
   const channelSessionMap = new Map<string, string>();
+  const channelSessionsStore = getChannelSessionsManager();
+  channelSessionsStore.load({}).then((saved) => {
+    for (const [cid, sid] of Object.entries(saved)) {
+      if (!channelSessionMap.has(cid)) channelSessionMap.set(cid, sid);
+    }
+  }).catch(() => { /* best-effort restore */ });
+  const persistChannelSessions = () => {
+    channelSessionsStore.save(Object.fromEntries(channelSessionMap)).catch(() => {});
+  };
 
   const claudeHandlers = createClaudeHandlers({
     workDir,
@@ -521,6 +532,7 @@ export function createAllHandlers(
       } else {
         channelSessionMap.delete(channelId);
       }
+      persistChannelSessions();
     },
     getClaudeSessionId: claudeSession.getSessionId,
     setClaudeSessionId: claudeSession.setSessionId,
