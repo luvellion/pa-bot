@@ -42,7 +42,7 @@ export interface BotManagers {
  */
 export interface BotContext extends BotManagers {
   /** Interval ID for periodic cleanup tasks */
-  cleanupIntervalId: number;
+  cleanupIntervalId: ReturnType<typeof setInterval>;
   /** Function to stop cleanup and release resources */
   stopCleanup: () => void;
 }
@@ -253,7 +253,7 @@ export function setupPeriodicCleanup(
   managers: BotManagers,
   intervalMs: number = DEFAULT_CLEANUP_INTERVAL_MS,
   additionalCleanup: Array<() => void> = []
-): number {
+): ReturnType<typeof setInterval> {
   const cleanup = () => {
     try {
       managers.crashHandler.cleanup();

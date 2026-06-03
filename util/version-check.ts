@@ -12,8 +12,14 @@ const denoConfig = JSON.parse(Deno.readTextFileSync("deno.json"));
 /** Current bot version from deno.json */
 export const BOT_VERSION: string = denoConfig.version ?? "unknown";
 
-const REPO_OWNER = "zebbern";
-const REPO_NAME = "claude-code-discord";
+const REPO_OWNER = "luvellion";
+const REPO_NAME = "pa-bot";
+
+// The upstream-style "you're behind the repo HEAD" nag is off by default: this
+// fork deploys via CI + GitOps (push to main → image build → rollout), not
+// `docker compose pull`, so commit-diff update notices are just noise. Set
+// VERSION_CHECK_ENABLED=true to re-enable.
+const VERSION_CHECK_ENABLED = Deno.env.get("VERSION_CHECK_ENABLED") === "true";
 
 export interface VersionCheckResult {
   upToDate: boolean;
@@ -97,6 +103,8 @@ export async function runVersionCheck(): Promise<{
     fields: Array<{ name: string; value: string; inline: boolean }>;
   };
 }> {
+  if (!VERSION_CHECK_ENABLED) return { updateAvailable: false };
+
   const result = await checkForUpdates();
 
   if (result.error) {
@@ -116,15 +124,13 @@ export async function runVersionCheck(): Promise<{
     embed: {
       color: 0xFFA500, // Orange
       title: "Update Available",
-      description: `A newer version of claude-code-discord is available on GitHub. You are running **v${BOT_VERSION}**.`,
+      description: `The \`${REPO_OWNER}/${REPO_NAME}\` repo is ahead of the running build (**v${BOT_VERSION}**).`,
       fields: [
-        { name: "Your Commit", value: `\`${result.localCommit}\``, inline: true },
+        { name: "Running Commit", value: `\`${result.localCommit}\``, inline: true },
         { name: "Latest Commit", value: `\`${result.remoteCommit}\``, inline: true },
         {
           name: "How to Update",
-          value: Deno.env.get("DOCKER_CONTAINER")
-            ? "```\ndocker compose pull && docker compose up -d\n```"
-            : "```\ngit pull origin main && deno task start\n```",
+          value: "Merge to `main` → CI builds the image → `kubectl rollout restart deploy/pa-bot`.",
           inline: false
         },
       ],
@@ -148,7 +154,9 @@ export function getLastCheckResult(): VersionCheckResult | null {
 export function startPeriodicUpdateCheck(
   onUpdateAvailable: (result: VersionCheckResult) => void,
   intervalMs = 12 * 60 * 60 * 1000
-): number {
+): ReturnType<typeof setInterval> | undefined {
+  if (!VERSION_CHECK_ENABLED) return undefined;
+
   const check = async () => {
     try {
       const result = await checkForUpdates();
@@ -164,5 +172,5 @@ export function startPeriodicUpdateCheck(
   // Run initial check to populate cache
   check();
 
-  return setInterval(check, intervalMs) as unknown as number;
+  return setInterval(check, intervalMs);
 }

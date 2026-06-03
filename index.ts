@@ -292,6 +292,11 @@ export async function createClaudeCodeBot(config: BotConfig) {
     onContinueSession: async (ctx) => {
       await allHandlers.claude.onContinue(ctx);
     },
+    // Natural-language message → same path as /claude (auto-resumes the
+    // session active in this channel/thread, or starts a new one).
+    onNaturalMessage: async (ctx, prompt, channelId) => {
+      await allHandlers.claude.onClaude(ctx, prompt, channelId);
+    },
     ...(monitorChannelId && monitorBotIds?.length && {
       monitorConfig: {
         channelId: monitorChannelId,
@@ -712,7 +717,7 @@ function setupSignalHandlers(ctx: {
   actualCategoryName: string;
   repoName: string;
   branchName: string;
-  cleanupInterval: number;
+  cleanupInterval: ReturnType<typeof setInterval>;
   // deno-lint-ignore no-explicit-any
   bot: any;
 }) {

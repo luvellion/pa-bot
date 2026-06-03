@@ -28,7 +28,7 @@ export interface GitShellHandlerDeps {
   /** Get current Claude controller */
   getClaudeController: () => AbortController | null;
   /** Cleanup interval ID */
-  cleanupInterval: number;
+  cleanupInterval: ReturnType<typeof setInterval>;
   /** Bot settings */
   botSettings: { mentionEnabled: boolean; mentionUserId: string | null };
 }

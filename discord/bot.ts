@@ -18,7 +18,7 @@ import {
 
 import { sanitizeChannelName } from "./utils.ts";
 import { handlePaginationInteraction } from "./pagination.ts";
-import { checkCommandPermission } from "../core/rbac.ts";
+import { checkCommandPermission, hasPermission } from "../core/rbac.ts";
 import { SETTINGS_ACTIONS, SETTINGS_VALUES } from "../settings/unified-settings.ts";
 import { BOT_VERSION } from "../util/version-check.ts";
 import type {
@@ -258,6 +258,49 @@ export async function createDiscordBot(
     const channel = client.channels.cache.get(channelId);
     // deno-lint-ignore no-explicit-any
     return !!(channel && (channel as any).parentId === myChannel.id);
+  }
+
+  // Build an InteractionContext backed by a plain Discord message — lets natural
+  // (non-slash) messages flow through the same Claude handler as /claude.
+  function createMessageContext(message: Message): InteractionContext {
+    // deno-lint-ignore no-explicit-any
+    const channel = message.channel as any;
+    // deno-lint-ignore no-explicit-any
+    let replyMsg: any = null;
+    // deno-lint-ignore no-explicit-any
+    const sendOrEdit = async (payload: any) => {
+      try {
+        if (replyMsg) await replyMsg.edit(payload);
+        else replyMsg = await channel.send(payload);
+      } catch { /* ignore send failures */ }
+    };
+    return {
+      async deferReply(): Promise<void> {
+        try { replyMsg = await channel.send({ content: "🤔 Thinking…" }); } catch { /* ignore */ }
+      },
+      async editReply(content: MessageContent): Promise<void> {
+        await sendOrEdit(convertMessageContent(content));
+      },
+      async followUp(content: MessageContent & { ephemeral?: boolean }): Promise<void> {
+        try { await channel.send(convertMessageContent(content)); } catch { /* ignore */ }
+      },
+      async reply(content: MessageContent & { ephemeral?: boolean }): Promise<void> {
+        await sendOrEdit(convertMessageContent(content));
+      },
+      async update(content: MessageContent): Promise<void> {
+        try { if (replyMsg) await replyMsg.edit(convertMessageContent(content)); } catch { /* ignore */ }
+      },
+      getString(): string | null { return null; },
+      getInteger(): number | null { return null; },
+      getBoolean(): boolean | null { return null; },
+      getMemberRoleIds(): Set<string> {
+        // deno-lint-ignore no-explicit-any
+        const roles = (message.member as any)?.roles?.cache;
+        return new Set<string>(roles ? [...roles.keys()] : []);
+      },
+      getUserId(): string { return message.author.id; },
+      getChannelId(): string { return message.channelId; },
+    };
   }
 
   // Command handler - completely generic
@@ -567,6 +610,30 @@ export async function createDiscordBot(
       await handleButton(interaction as ButtonInteraction);
     }
   });
+
+  // Natural-language chat: a plain message (no slash command) in the bot's
+  // channel or one of its threads is routed straight to Claude, so you can just
+  // talk to it. Gated to our channels + authorised users (RBAC).
+  if (dependencies.onNaturalMessage) {
+    client.on(Events.MessageCreate, async (message: Message) => {
+      if (message.author.bot || message.author.id === client.user?.id) return;
+      const content = message.content?.trim();
+      if (!content) return;                       // ignore empty / attachment-only
+      if (!isOurChannel(message.channelId)) return;
+
+      const ctx = createMessageContext(message);
+      if (!hasPermission(ctx)) {                   // owner/admin only
+        try { await message.react("🔒"); } catch { /* ignore */ }
+        return;
+      }
+
+      try {
+        await dependencies.onNaturalMessage!(ctx, content, message.channelId);
+      } catch (error) {
+        console.error("Error handling natural message:", error);
+      }
+    });
+  }
 
   // Channel monitoring -- auto-respond to messages from specific bots/webhooks
   if (dependencies.monitorConfig) {

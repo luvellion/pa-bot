@@ -34,7 +34,7 @@ export interface CommandWrapperDeps {
   /** Bot settings */
   botSettings: { mentionEnabled: boolean; mentionUserId: string | null };
   /** Cleanup interval ID */
-  cleanupInterval: number;
+  cleanupInterval: ReturnType<typeof setInterval>;
 }
 
 // ================================

@@ -340,7 +340,7 @@ export function withCrashReporting<T extends any[], R>(
 
 // Health check utilities
 export class ProcessHealthMonitor {
-  private intervals = new Map<string, number>();
+  private intervals = new Map<string, ReturnType<typeof setInterval>>();
   private healthStatus = new Map<string, boolean>();
   
   constructor(private crashHandler: ProcessCrashHandler) {}

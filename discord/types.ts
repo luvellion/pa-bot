@@ -127,4 +127,10 @@ export interface BotDependencies {
   onContinueSession?: (ctx: InteractionContext) => Promise<void>;
   /** Optional channel monitoring config for auto-responding to messages */
   monitorConfig?: MonitorConfig;
+  /**
+   * Handle a plain (non-command) message in the bot's channel/threads by routing
+   * it to Claude — enables natural conversation without `/claude`. The ctx is a
+   * message-backed InteractionContext; channelId selects/continues the session.
+   */
+  onNaturalMessage?: (ctx: InteractionContext, prompt: string, channelId: string) => Promise<void>;
 }
