@@ -334,6 +334,26 @@ export async function createClaudeCodeBot(config: BotConfig) {
     }),
   };
 
+  // Leader election (opt-in): block until this pod holds the lease so only one
+  // instance ever connects to Discord, regardless of replica count. On losing
+  // leadership later, exit so the single Discord connection is never duplicated.
+  if (Deno.env.get("LEADER_ELECTION_ENABLED") === "true") {
+    const { runLeaderElection } = await import("./core/leader-election.ts");
+    const identity = Deno.env.get("POD_NAME") || Deno.hostname();
+    const namespace = Deno.env.get("POD_NAMESPACE") || "default";
+    const leaseName = Deno.env.get("LEASE_NAME") || "pa-bot-leader";
+    try {
+      await runLeaderElection(
+        { leaseName, namespace, identity },
+        () => Deno.exit(1),
+      );
+    } catch (err) {
+      // Misconfiguration (e.g. no in-cluster token) — don't hang the bot; the
+      // RWO PVCs still serialise pods. Proceed as the sole instance.
+      console.error("[Leader] Election unavailable, proceeding as singleton:", err instanceof Error ? err.message : err);
+    }
+  }
+
   // Create Discord bot
   bot = await createDiscordBot(config, handlers, buttonHandlers, dependencies, crashHandler);
 

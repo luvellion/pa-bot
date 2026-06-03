@@ -303,6 +303,47 @@ export async function createDiscordBot(
     };
   }
 
+  // On (re)connect, handle authorised messages that arrived while the bot was
+  // offline — Discord doesn't replay gateway events for downtime (e.g. a deploy).
+  // Stateless: the channel is the cursor — our user's trailing messages after the
+  // bot's last message are unanswered, so route them to Claude. Bounded to recent
+  // messages so old history isn't replayed on first start.
+  async function catchUpMissedMessages(): Promise<void> {
+    if (!dependencies.onNaturalMessage || !myChannel) return;
+    const MAX_AGE_MS = 60 * 60 * 1000; // ignore anything older than 1h
+    // deno-lint-ignore no-explicit-any
+    const channels: any[] = [myChannel];
+    try {
+      const active = await myChannel.threads.fetchActive();
+      for (const t of active.threads.values()) channels.push(t);
+    } catch { /* no thread access — main channel only */ }
+
+    for (const ch of channels) {
+      try {
+        const fetched = await ch.messages.fetch({ limit: 25 });
+        // deno-lint-ignore no-explicit-any
+        const ordered = [...fetched.values()].reverse() as any[]; // oldest-first
+        let lastBotIdx = -1;
+        ordered.forEach((m, i) => { if (m.author.id === client.user?.id) lastBotIdx = i; });
+        const unanswered = ordered.slice(lastBotIdx + 1).filter((m) =>
+          !m.author.bot &&
+          m.author.id !== client.user?.id &&
+          m.content?.trim() &&
+          (Date.now() - m.createdTimestamp) < MAX_AGE_MS
+        );
+        if (unanswered.length === 0) continue;
+
+        const ctx = createMessageContext(unanswered[unanswered.length - 1]);
+        if (!hasPermission(ctx)) continue;
+        const prompt = unanswered.map((m) => m.content.trim()).join("\n");
+        console.log(`[Catch-up] Handling ${unanswered.length} missed message(s) in channel ${ch.id}`);
+        await dependencies.onNaturalMessage(ctx, prompt, ch.id);
+      } catch (error) {
+        console.error("[Catch-up] Error scanning channel:", error);
+      }
+    }
+  }
+
   // Command handler - completely generic
   async function handleCommand(interaction: CommandInteraction) {
     if (!isOurChannel(interaction.channelId)) {
@@ -572,6 +613,10 @@ export async function createDiscordBot(
     try {
       myChannel = await ensureChannelExists(guild);
       console.log(`Using channel "${myChannel.name}"`);
+
+      // Recover messages sent while the bot was offline (e.g. during a deploy) —
+      // before the startup embed, so it doesn't become the "last message".
+      await catchUpMissedMessages();
 
       await myChannel.send(convertMessageContent({
         embeds: [{
