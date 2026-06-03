@@ -389,6 +389,43 @@ export async function createClaudeCodeBot(config: BotConfig) {
   // Initialize PermissionRequest handler — shows Allow/Deny buttons for unapproved tools
   permReqState.handler = createPermissionRequestHandler(bot, getActiveSessionChannel);
 
+  // HTTP task trigger — K8s CronJobs POST {task, channel} here to run a scheduled
+  // Claude turn (the bot is otherwise outbound-only). Only the leader reaches this
+  // (past the leader-election gate). Auth via the TRIGGER_TOKEN bearer.
+  const triggerToken = Deno.env.get("TRIGGER_TOKEN");
+  if (triggerToken) {
+    const triggerPort = parseInt(Deno.env.get("TRIGGER_PORT") || "8787", 10);
+    Deno.serve({ port: triggerPort, hostname: "0.0.0.0" }, async (req) => {
+      const url = new URL(req.url);
+      if (req.method === "GET" && url.pathname === "/healthz") return new Response("ok\n");
+      if (req.method !== "POST" || url.pathname !== "/task") return new Response("not found\n", { status: 404 });
+      if (req.headers.get("authorization") !== `Bearer ${triggerToken}`) return new Response("unauthorized\n", { status: 401 });
+      let body: { task?: string; channel?: string };
+      try { body = await req.json(); } catch { return new Response("bad json\n", { status: 400 }); }
+      const task = (body.task || "").trim();
+      if (!task) return new Response("missing task\n", { status: 400 });
+      // Run async so the CronJob's curl returns immediately.
+      (async () => {
+        try {
+          const channel = body.channel ? await bot.getOrCreateChannel(body.channel) : bot.getChannel();
+          if (!channel) { console.error("[Trigger] no target channel"); return; }
+          const sender = createClaudeSender(createChannelSenderAdapter(channel));
+          const controller = new AbortController();
+          await sendToClaudeCode(
+            workDir, task, controller, undefined, undefined,
+            (jsonData) => { const msgs = convertToClaudeMessages(jsonData); if (msgs.length > 0) sender(msgs).catch(() => {}); },
+            false,
+          );
+        } catch (err) {
+          console.error("[Trigger] task failed:", err instanceof Error ? err.message : err);
+        }
+      })();
+      console.log(`[Trigger] queued task → ${body.channel ?? "main"}: ${task.slice(0, 80)}`);
+      return new Response("accepted\n", { status: 202 });
+    });
+    console.log(`[Trigger] HTTP task trigger on :${triggerPort}`);
+  }
+
   // Check for updates (non-blocking)
   runVersionCheck().then(async ({ updateAvailable, embed }) => {
     if (updateAvailable && embed) {

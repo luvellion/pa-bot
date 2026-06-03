@@ -175,6 +175,28 @@ export async function createDiscordBot(
     return channel as TextChannel;
   }
 
+  // Find or create a text channel by name under the bot's category. Used by the
+  // HTTP task trigger to target a channel like "daily-updates".
+  async function getOrCreateChannel(name: string): Promise<TextChannel> {
+    const channelName = sanitizeChannelName(name);
+    if (!myCategory) throw new Error("Bot category not ready yet");
+    // deno-lint-ignore no-explicit-any
+    const guild: any = myCategory.guild;
+    let channel = guild.channels.cache.find(
+      // deno-lint-ignore no-explicit-any
+      (c: any) => c.type === ChannelType.GuildText && c.name === channelName && c.parentId === myCategory.id,
+    );
+    if (!channel) {
+      channel = await guild.channels.create({
+        name: channelName,
+        type: ChannelType.GuildText,
+        parent: myCategory.id,
+      });
+      console.log(`Created channel "${channelName}"`);
+    }
+    return channel as TextChannel;
+  }
+
   // Create interaction context wrapper
   function createInteractionContext(interaction: CommandInteraction | ButtonInteraction): InteractionContext {
     return {
@@ -741,6 +763,7 @@ export async function createDiscordBot(
     getChannel() {
       return myChannel;
     },
+    getOrCreateChannel,
     updateBotSettings(settings: { mentionEnabled: boolean; mentionUserId: string | null }) {
       botSettings.mentionEnabled = settings.mentionEnabled;
       botSettings.mentionUserId = settings.mentionUserId;
