@@ -42,6 +42,17 @@ RUN curl -fsSL -o /usr/local/bin/kubectl "https://dl.k8s.io/release/$(curl -fsSL
     rm -rf /tmp/gh_* && \
     kubectl version --client && gh --version
 
+# kustomize + helm so the homelab-developer subagent can build the homelab-cluster
+# project (its Makefile runs `kustomize build`, and traefik/hajimari use
+# `--enable-helm` to inflate Helm charts). Image is linux/arm64; versions pinned.
+ENV KUSTOMIZE_VERSION=5.4.2 HELM_VERSION=3.14.4
+RUN curl -fsSL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv${KUSTOMIZE_VERSION}/kustomize_v${KUSTOMIZE_VERSION}_linux_arm64.tar.gz" | tar -xz -C /usr/local/bin kustomize && \
+    chmod +x /usr/local/bin/kustomize && \
+    curl -fsSL "https://get.helm.sh/helm-v${HELM_VERSION}-linux-arm64.tar.gz" | tar -xz -C /tmp && \
+    mv /tmp/linux-arm64/helm /usr/local/bin/helm && rm -rf /tmp/linux-arm64 && \
+    chmod +x /usr/local/bin/helm && \
+    kustomize version && helm version
+
 # Copy all source files (as root)
 COPY . .
 
