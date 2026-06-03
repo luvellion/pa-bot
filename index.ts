@@ -411,11 +411,21 @@ export async function createClaudeCodeBot(config: BotConfig) {
           if (!channel) { console.error("[Trigger] no target channel"); return; }
           const sender = createClaudeSender(createChannelSenderAdapter(channel));
           const controller = new AbortController();
-          await sendToClaudeCode(
-            workDir, task, controller, undefined, undefined,
-            (jsonData) => { const msgs = convertToClaudeMessages(jsonData); if (msgs.length > 0) sender(msgs).catch(() => {}); },
-            false,
+          // Scheduled tasks run unattended: no human to approve tool use, so use
+          // bypassPermissions (these are trusted, declarative jobs gated by the
+          // trigger token). Don't stream — post only the final result so the
+          // channel gets one clean message, not the agent's intermediate narration
+          // or step/permission noise.
+          const result = await sendToClaudeCode(
+            workDir, task, controller,
+            undefined, // sessionId
+            undefined, // onChunk
+            undefined, // onStreamJson (omitted → result.response is the final message)
+            false, // continueMode
+            { permissionMode: "bypassPermissions" },
           );
+          const text = (result.response || "").trim();
+          if (text) await sender([{ type: "text", content: text }]);
         } catch (err) {
           console.error("[Trigger] task failed:", err instanceof Error ? err.message : err);
         }
