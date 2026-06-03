@@ -23,8 +23,10 @@ RUN apt-get update && \
 RUN groupadd -r -g ${GROUP_ID} claude && \
     useradd -r -u ${USER_ID} -g claude -m claude
 
-# Install Claude Code CLI globally via npm
-RUN npm install -g @anthropic-ai/claude-code && \
+# Install Claude Code CLI + the Google Calendar MCP globally so the MCP loads
+# instantly (no runtime npx download, which can time out on a cold cache after
+# a restart and leave the agent without calendar tools).
+RUN npm install -g @anthropic-ai/claude-code @cocal/google-calendar-mcp && \
     npm cache clean --force
 
 # Verify claude binary is accessible
