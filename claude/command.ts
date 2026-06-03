@@ -70,6 +70,10 @@ export const claudeCommands = [
   new SlashCommandBuilder()
     .setName('claude-cancel')
     .setDescription('Cancel currently running Claude Code command'),
+
+  new SlashCommandBuilder()
+    .setName('clear')
+    .setDescription('Clear this channel\'s conversation — the next message starts fresh'),
 ];
 
 export interface ClaudeHandlerDeps {
@@ -330,6 +334,19 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
       deps.setClaudeSessionId(undefined);
 
       return true;
+    },
+
+    /**
+     * /clear — reset this channel/thread's session so the next message starts a
+     * fresh conversation (Claude's transcript stays on disk; we just stop
+     * resuming it for this channel).
+     */
+    onClear(channelId: string): void {
+      const existing = deps.getClaudeController();
+      if (existing) existing.abort();
+      deps.setClaudeController(null);
+      deps.setSessionForChannel(channelId, undefined);
+      deps.setClaudeSessionId(undefined);
     }
   };
 }

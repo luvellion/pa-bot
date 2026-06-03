@@ -504,7 +504,7 @@ export function createExpandButtonHandler(
         embeds: [{
           color: 0x0099ff,
           title: '📖 Full Content',
-          description: expandId.startsWith('result-') ?
+          description: (expandId.startsWith('result-') || expandId.startsWith('steps-')) ?
             `\`\`\`\n${fullContent}\n\`\`\`` :
             `\`\`\`json\n${fullContent}\n\`\`\``,
           timestamp: true

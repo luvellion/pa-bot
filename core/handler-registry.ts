@@ -656,6 +656,16 @@ export function createAllHandlers(
  *
  * @returns Array of all command definitions
  */
+// Curated set of commands actually published to Discord for this personal
+// assistant. The rest of the upstream commands (coding shortcuts, host/shell
+// introspection, worktree/agent/todos) stay in the code but aren't registered.
+// Edit this set to re-enable any of them.
+const ALLOWED_COMMANDS = new Set<string>([
+  "claude", "claude-thread", "resume", "claude-cancel", "clear",
+  "help", "status", "settings", "mcp", "fast", "model",
+  "rewind", "claude-sessions", "shutdown",
+]);
+
 export function getAllCommands() {
   return [
     ...claudeCommands,
@@ -671,7 +681,7 @@ export function getAllCommands() {
     ...screenshotCommands,
     ...infoCommands,
     helpCommand,
-  ];
+  ].filter((cmd) => ALLOWED_COMMANDS.has((cmd as { name: string }).name));
 }
 
 // Re-export for convenience

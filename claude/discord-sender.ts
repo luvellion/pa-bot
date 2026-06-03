@@ -129,8 +129,50 @@ function formatGenericTool(toolName: string, metadata: any): { title: string; co
 
 // Create sendClaudeMessages function with dependency injection
 export function createClaudeSender(sender: DiscordSender) {
+  // Quiet mode (default on): collapse tool/thinking/metadata noise behind one
+  // "Show steps" button per turn — only assistant responses post inline.
+  const QUIET = Deno.env.get("QUIET_MODE") !== "false";
+  let stepLog: string[] = [];
+  const compact = (s: unknown, n = 300) => {
+    const t = (s ?? "").toString().replace(/\s+/g, " ").trim();
+    return t.length > n ? t.slice(0, n) + "…" : t;
+  };
+  const formatStep = (msg: ClaudeMessage): string => {
+    if (msg.type === "tool_use") {
+      // deno-lint-ignore no-explicit-any
+      const m: any = msg.metadata || {};
+      let input = "";
+      try { input = typeof m.input === "string" ? m.input : JSON.stringify(m.input); } catch { /* ignore */ }
+      return `🔧 ${m.name || "tool"} ${compact(input)}`.trim();
+    }
+    if (msg.type === "thinking") return `💭 ${compact(msg.content)}`;
+    if (msg.type === "tool_result") return `   ↳ ${compact(msg.content)}`;
+    return "";
+  };
+  const flushSteps = async () => {
+    if (stepLog.length === 0) return;
+    const id = `steps-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    expandableContent.set(id, stepLog.join("\n"));
+    const n = stepLog.length;
+    stepLog = [];
+    await sender.sendMessage({
+      embeds: [{ color: 0x4f545c, description: `🔍 _${n} step${n === 1 ? "" : "s"} hidden (tools / thinking)_` }],
+      components: [{ type: "actionRow", components: [{ type: "button", customId: `expand:${id}`, label: "Show steps", style: "secondary" }] }],
+    });
+  };
+
   return async function sendClaudeMessages(messages: ClaudeMessage[]) {
   for (const msg of messages) {
+    if (QUIET && (msg.type === "tool_use" || msg.type === "tool_result" || msg.type === "thinking")) {
+      const line = formatStep(msg);
+      if (line) stepLog.push(line);
+      continue;
+    }
+    if (QUIET && msg.type === "system") {
+      await flushSteps(); // post buffered steps behind a button at turn end
+      // deno-lint-ignore no-explicit-any
+      if ((msg.metadata as any)?.subtype !== "error") continue; // suppress the cost/metadata line (but show errors)
+    }
     switch (msg.type) {
       case 'text': {
         const chunks = splitText(msg.content, 4000);

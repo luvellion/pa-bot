@@ -325,6 +325,20 @@ export function createClaudeCommandHandlers(
         });
       }
     }],
+    ['clear', {
+      execute: async (ctx: InteractionContext) => {
+        await ctx.deferReply();
+        claudeHandlers.onClear(ctx.getChannelId());
+        await ctx.editReply({
+          embeds: [{
+            color: 0x808080,
+            title: '🧹 Conversation cleared',
+            description: 'This channel\'s session was reset — the next message starts a fresh conversation.',
+            timestamp: true
+          }]
+        });
+      }
+    }],
     ['claude-enhanced', {
       execute: async (ctx: InteractionContext) => {
         const prompt = ctx.getString('prompt', true)!;
