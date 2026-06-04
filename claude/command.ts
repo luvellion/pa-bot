@@ -155,6 +155,14 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
         activeSessionId, // resume if present, new session if undefined
         undefined,
         (jsonData) => {
+          // Persist the channel→session mapping as soon as the SDK reports the
+          // session id — not only after the turn completes. Otherwise a turn
+          // interrupted by a follow-up message (which aborts it) never records
+          // its session, so the next message can't resume it and starts fresh.
+          const sid = (jsonData as { session_id?: string })?.session_id;
+          if (sid && deps.getSessionForChannel(channelId) !== sid) {
+            deps.setSessionForChannel(channelId, sid);
+          }
           const claudeMessages = convertToClaudeMessages(jsonData);
           if (claudeMessages.length > 0) {
             activeSender(claudeMessages).catch(() => {});
@@ -224,6 +232,13 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
         undefined, // always a new session
         undefined,
         (jsonData) => {
+          // Map this thread to its session as soon as the SDK reports the id, so
+          // a follow-up message in the thread resumes it even if this turn is
+          // interrupted before it completes (e.g. plan presented, then "apply").
+          const sid = (jsonData as { session_id?: string })?.session_id;
+          if (sid && threadChannelId && deps.getSessionForChannel(threadChannelId) !== sid) {
+            deps.setSessionForChannel(threadChannelId, sid);
+          }
           const claudeMessages = convertToClaudeMessages(jsonData);
           if (claudeMessages.length > 0) {
             activeSender(claudeMessages).catch(() => {});

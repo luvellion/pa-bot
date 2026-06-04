@@ -358,6 +358,12 @@ export async function createClaudeCodeBot(config: BotConfig) {
     }
   }
 
+  // Ensure the persisted channel→session map is loaded before the bot starts
+  // handling messages. Otherwise an early message (common right after a restart)
+  // would miss the existing session, start a new one, and overwrite the saved
+  // mapping — making a thread reply lose its conversation context.
+  await allHandlers.channelSessionsReady;
+
   // Create Discord bot
   bot = await createDiscordBot(config, handlers, buttonHandlers, dependencies, crashHandler);
 

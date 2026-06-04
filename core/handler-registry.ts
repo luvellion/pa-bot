@@ -139,6 +139,12 @@ export interface AllHandlers {
   agent: ReturnType<typeof createAgentHandlers>;
   screenshot: ReturnType<typeof createScreenshotHandlers>;
   infoCommands: ReturnType<typeof createInfoCommandHandlers>;
+  /**
+   * Resolves once the persisted channel→session map has loaded. Await this
+   * before the bot starts handling Discord messages so an early message can't
+   * miss an existing session, start a new one, and clobber the saved mapping.
+   */
+  channelSessionsReady: Promise<void>;
 }
 
 /**
@@ -512,7 +518,13 @@ export function createAllHandlers(
   // Persisted to .bot-data so conversations resume across pod restarts.
   const channelSessionMap = new Map<string, string>();
   const channelSessionsStore = getChannelSessionsManager();
-  channelSessionsStore.load({}).then((saved) => {
+  // Capture the load promise so the caller can await it before the bot starts
+  // processing messages. Previously this was fire-and-forget: a message that
+  // arrived before the load resolved resolved to no session, started a brand-new
+  // one, and the subsequent save() persisted over the good mapping — orphaning
+  // the prior session (a /claude-thread conversation losing all context on the
+  // very next reply, especially right after a restart).
+  const channelSessionsReady = channelSessionsStore.load({}).then((saved) => {
     for (const [cid, sid] of Object.entries(saved)) {
       if (!channelSessionMap.has(cid)) channelSessionMap.set(cid, sid);
     }
@@ -648,6 +660,7 @@ export function createAllHandlers(
     agent: agentHandlers,
     screenshot: screenshotHandlers,
     infoCommands: infoCommandHandlers,
+    channelSessionsReady,
   };
 }
 
