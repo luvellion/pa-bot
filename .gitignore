@@ -3,6 +3,9 @@
 # Bot runtime data (persistence files)
 .bot-data/
 
+# Downloaded Discord attachments (transient, not tracked)
+.attachments/
+
 # Claude session data (ignore all except mcp.json)
 .claude/
 !.claude/mcp.json
