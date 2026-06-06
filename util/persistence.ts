@@ -243,6 +243,36 @@ export function getChannelSessionsManager(dataDir?: string): PersistenceManager<
 }
 
 /**
+ * Serialized form of a SessionThread. The live Discord ThreadChannel reference
+ * is intentionally not stored — it's re-fetched from Discord by `threadId` on
+ * first use after a restart (see SessionThreadManager.setThreadChannel).
+ */
+export interface SerializedSessionThread {
+  sessionId: string;
+  threadId: string;
+  threadName: string;
+  /** ISO-8601 timestamp */
+  createdAt: string;
+  /** ISO-8601 timestamp */
+  lastActivity: string;
+  messageCount: number;
+}
+
+let sessionThreadsManager: PersistenceManager<SerializedSessionThread[]> | null = null;
+
+/**
+ * Get or create the session→thread persistence manager. Persists the mapping
+ * between Claude sessions and their dedicated Discord threads so that routing
+ * (streamed output, AskUser/permission prompts) survives restarts/upgrades.
+ */
+export function getSessionThreadsManager(dataDir?: string): PersistenceManager<SerializedSessionThread[]> {
+  if (!sessionThreadsManager) {
+    sessionThreadsManager = new PersistenceManager<SerializedSessionThread[]>("session-threads", { dataDir });
+  }
+  return sessionThreadsManager;
+}
+
+/**
  * Initialize all persistence managers
  */
 export async function initAllPersistence(dataDir?: string): Promise<void> {

@@ -19,7 +19,8 @@ import {
   type MessageContent,
   SessionThreadManager,
 } from "./discord/index.ts";
-import type { TextChannel } from "npm:discord.js@14.14.1";
+import type { TextChannel, ThreadChannel } from "npm:discord.js@14.14.1";
+import { getSessionThreadsManager } from "./util/persistence.ts";
 
 import { getGitInfo } from "./git/index.ts";
 import { createClaudeSender, expandableContent, sendToClaudeCode, convertToClaudeMessages, type DiscordSender, type ClaudeMessage, type SessionThreadCallbacks } from "./claude/index.ts";
@@ -134,8 +135,36 @@ export async function createClaudeCodeBot(config: BotConfig) {
   let bot: any;
   let claudeSender: ((messages: ClaudeMessage[]) => Promise<void>) | null = null;
 
-  // Session thread manager — maps each Claude session to a dedicated Discord thread
+  // Session thread manager — maps each Claude session to a dedicated Discord thread.
+  // The mapping is persisted to .bot-data so session threads keep routing
+  // correctly across restarts/upgrades (e.g. a /claude-thread session continued
+  // after the bot redeploys). Live ThreadChannel refs are rehydrated lazily from
+  // Discord on first use (see resolveThreadChannel).
   const sessionThreadManager = new SessionThreadManager();
+  const sessionThreadsStore = getSessionThreadsManager();
+  sessionThreadManager.hydrate(await sessionThreadsStore.load([]));
+  sessionThreadManager.setPersistHook(() => {
+    sessionThreadsStore.save(sessionThreadManager.serialize()).catch(() => {});
+  });
+
+  // Resolve the live ThreadChannel for a session. After a restart the in-memory
+  // channel cache is empty, but the persisted metadata gives us the thread id to
+  // re-fetch from Discord. Returns undefined if the thread no longer exists.
+  const resolveThreadChannel = async (sessionId: string): Promise<ThreadChannel | undefined> => {
+    const cached = sessionThreadManager.getThread(sessionId);
+    if (cached) return cached;
+    const meta = sessionThreadManager.getSessionThread(sessionId);
+    if (!meta) return undefined;
+    try {
+      const ch = await bot?.client?.channels?.fetch(meta.threadId);
+      // deno-lint-ignore no-explicit-any
+      if (ch && typeof (ch as any).isThread === "function" && (ch as any).isThread()) {
+        sessionThreadManager.setThreadChannel(sessionId, ch as ThreadChannel);
+        return ch as ThreadChannel;
+      }
+    } catch { /* thread deleted or inaccessible — fall back to main channel */ }
+    return undefined;
+  };
 
   // Session thread callbacks — used by claude/command.ts for /claude-thread and /resume.
   // The callbacks are closures over `bot` (late-bound) and `sessionThreadManager`.
@@ -146,7 +175,7 @@ export async function createClaudeCodeBot(config: BotConfig) {
 
       // If a session ID was provided, check for an existing thread to reuse
       if (sessionId) {
-        const existingThread = sessionThreadManager.getThread(sessionId);
+        const existingThread = await resolveThreadChannel(sessionId);
         if (existingThread) {
           if (existingThread.archived) {
             await existingThread.setArchived(false);
@@ -183,7 +212,7 @@ export async function createClaudeCodeBot(config: BotConfig) {
     },
 
     async getThreadSender(sessionId: string) {
-      const existingThread = sessionThreadManager.getThread(sessionId);
+      const existingThread = await resolveThreadChannel(sessionId);
       if (!existingThread) return undefined;
 
       if (existingThread.archived) {

@@ -15,6 +15,7 @@ import {
 } from "npm:discord.js@14.14.1";
 
 import type { SessionThread } from "./types.ts";
+import type { SerializedSessionThread } from "../util/persistence.ts";
 
 /**
  * Truncate and sanitise a user prompt into a thread name (max 100 chars for Discord).
@@ -39,6 +40,54 @@ export class SessionThreadManager {
   private threads = new Map<string, SessionThread>();
   /** sessionId → live ThreadChannel reference (may be stale) */
   private threadChannels = new Map<string, ThreadChannel>();
+  /** Called after any change to the thread metadata, to persist it. */
+  private persist?: () => void;
+
+  // ──────────────── Persistence (survive restarts) ────────────────
+
+  /**
+   * Register a callback invoked after every change to the session→thread map.
+   * The caller persists the result of {@link serialize} so the mapping (and
+   * therefore output/prompt routing) survives a restart or upgrade.
+   */
+  setPersistHook(fn: () => void): void {
+    this.persist = fn;
+  }
+
+  /**
+   * Serialize the thread metadata for persistence. The live ThreadChannel
+   * references are not serialized — they're re-fetched from Discord by
+   * `threadId` on first use after a restart (see {@link setThreadChannel}).
+   */
+  serialize(): SerializedSessionThread[] {
+    return Array.from(this.threads.values()).map((t) => ({
+      sessionId: t.sessionId,
+      threadId: t.threadId,
+      threadName: t.threadName,
+      createdAt: t.createdAt.toISOString(),
+      lastActivity: t.lastActivity.toISOString(),
+      messageCount: t.messageCount,
+    }));
+  }
+
+  /**
+   * Restore thread metadata from persisted data on startup. Existing in-memory
+   * entries take precedence (we never clobber a live mapping). ThreadChannel
+   * refs stay empty until rehydrated lazily on first use.
+   */
+  hydrate(saved: SerializedSessionThread[]): void {
+    for (const s of saved) {
+      if (this.threads.has(s.sessionId)) continue;
+      this.threads.set(s.sessionId, {
+        sessionId: s.sessionId,
+        threadId: s.threadId,
+        threadName: s.threadName,
+        createdAt: new Date(s.createdAt),
+        lastActivity: new Date(s.lastActivity),
+        messageCount: s.messageCount,
+      });
+    }
+  }
 
   // ───────────────────── Create ─────────────────────
 
@@ -76,6 +125,7 @@ export class SessionThreadManager {
 
     this.threads.set(sessionId, meta);
     this.threadChannels.set(sessionId, thread);
+    this.persist?.();
 
     return thread;
   }
@@ -133,6 +183,7 @@ export class SessionThreadManager {
     if (meta) {
       meta.lastActivity = new Date();
       meta.messageCount++;
+      this.persist?.();
     }
   }
 
@@ -154,6 +205,8 @@ export class SessionThreadManager {
       this.threadChannels.delete(oldId);
       this.threadChannels.set(newId, channel);
     }
+
+    if (meta || channel) this.persist?.();
   }
 
   /**
@@ -179,6 +232,7 @@ export class SessionThreadManager {
         removed++;
       }
     }
+    if (removed > 0) this.persist?.();
     return removed;
   }
 }
