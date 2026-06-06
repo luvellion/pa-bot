@@ -188,6 +188,10 @@ export interface HandlerRegistryDeps {
   /** Thread-per-session callbacks (optional). When provided, each /claude
    *  invocation creates a dedicated Discord thread for its output. */
   sessionThreads?: SessionThreadCallbacks;
+  /** Set the channel/thread the active turn streams to, so AskUserQuestion and
+   *  permission prompts are routed there instead of an unrelated thread. */
+  // deno-lint-ignore no-explicit-any
+  setActiveTurnChannel?: (channel: any) => void;
 }
 
 /**
@@ -551,6 +555,7 @@ export function createAllHandlers(
     sendClaudeMessages,
     getQueryOptions,
     sessionThreads: deps.sessionThreads,
+    setActiveTurnChannel: deps.setActiveTurnChannel,
   });
 
   const gitHandlers = createGitHandlers({

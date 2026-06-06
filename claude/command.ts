@@ -94,6 +94,11 @@ export interface ClaudeHandlerDeps {
   getQueryOptions?: () => ClaudeModelOptions;
   /** Thread-per-session callbacks (optional — when absent, falls back to main channel) */
   sessionThreads?: SessionThreadCallbacks;
+  /** Set the channel/thread the active turn streams to, so AskUserQuestion and
+   *  permission prompts go there. Called with null to default to the main
+   *  channel; the sessionThreads callbacks set it to a thread when one is used. */
+  // deno-lint-ignore no-explicit-any
+  setActiveTurnChannel?: (channel: any) => void;
 }
 
 export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
@@ -127,13 +132,21 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
       // across restarts, unlike the in-memory session→thread map (which is empty
       // after a restart and never set for threads not created via /claude-thread).
       let activeSender = overrideSender || sendClaudeMessages;
-      if (!overrideSender && activeSessionId && deps.sessionThreads) {
-        try {
-          const existing = await deps.sessionThreads.getThreadSender(activeSessionId);
-          if (existing) {
-            activeSender = existing.sender;
-          }
-        } catch { /* fallback to main sender */ }
+      // Route AskUser/permission prompts to the right place. With an override
+      // sender (natural message) the caller already set the active-turn channel.
+      // Otherwise default to the main channel; getThreadSender below resets it to
+      // the session's thread if one exists, so prompts don't leak to a stale
+      // thread from a previous turn.
+      if (!overrideSender) {
+        deps.setActiveTurnChannel?.(null);
+        if (activeSessionId && deps.sessionThreads) {
+          try {
+            const existing = await deps.sessionThreads.getThreadSender(activeSessionId);
+            if (existing) {
+              activeSender = existing.sender;
+            }
+          } catch { /* fallback to main sender */ }
+        }
       }
 
       const isResuming = !!activeSessionId;
@@ -201,6 +214,10 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
       let activeSender = sendClaudeMessages;
       let threadSessionKey: string | undefined;
       let threadChannelId: string | undefined;
+
+      // Default to the main channel; createThreadSender resets this to the new
+      // thread on success, so AskUser/permission prompts go to the thread.
+      deps.setActiveTurnChannel?.(null);
 
       if (deps.sessionThreads) {
         try {
@@ -283,6 +300,10 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
       // Check if the most recent session has a thread — if so, reuse it
       let activeSender = sendClaudeMessages;
       let isReusingThread = false;
+
+      // Default AskUser/permission prompts to the main channel; getThreadSender
+      // below resets it to the session's thread when one is reused.
+      deps.setActiveTurnChannel?.(null);
 
       if (deps.sessionThreads) {
         const currentSessionId = deps.getClaudeSessionId();

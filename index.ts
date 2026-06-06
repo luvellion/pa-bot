@@ -76,6 +76,18 @@ export async function createClaudeCodeBot(config: BotConfig) {
   let claudeController: AbortController | null = null;
   let claudeSessionId: string | undefined;
 
+  // The Discord channel/thread the currently-running turn streams to. Set at the
+  // start of every turn (natural message, /claude, /claude-thread, /resume,
+  // monitor, trigger) so AskUserQuestion prompts and permission Allow/Deny
+  // buttons land in the SAME thread the request arrived in. Turns are
+  // serialized (each new turn aborts the previous), so this is the active turn.
+  // Was previously derived from a global session-id heuristic that mis-routed
+  // prompts into unrelated threads (a question for one thread appearing in another).
+  // deno-lint-ignore no-explicit-any
+  const activeTurn: { channel: any } = { channel: null };
+  // deno-lint-ignore no-explicit-any
+  const setActiveTurnChannel = (channel: any) => { activeTurn.channel = channel; };
+
   // Message history for navigation
   const messageHistoryOps: MessageHistoryOps = createMessageHistory(50);
 
@@ -140,6 +152,7 @@ export async function createClaudeCodeBot(config: BotConfig) {
             await existingThread.setArchived(false);
           }
           sessionThreadManager.recordActivity(sessionId);
+          setActiveTurnChannel(existingThread); // route AskUser/permission prompts here
           const threadSender = createClaudeSender(createChannelSenderAdapter(existingThread));
           return { sender: threadSender, threadSessionKey: sessionId, threadChannelId: existingThread.id };
         }
@@ -164,6 +177,7 @@ export async function createClaudeCodeBot(config: BotConfig) {
         }],
       });
 
+      setActiveTurnChannel(thread); // route AskUser/permission prompts to the new thread
       const threadSender = createClaudeSender(createChannelSenderAdapter(thread));
       return { sender: threadSender, threadSessionKey: placeholderKey, threadChannelId: thread.id };
     },
@@ -176,6 +190,7 @@ export async function createClaudeCodeBot(config: BotConfig) {
         await existingThread.setArchived(false);
       }
       sessionThreadManager.recordActivity(sessionId);
+      setActiveTurnChannel(existingThread); // route AskUser/permission prompts here
       const threadSender = createClaudeSender(createChannelSenderAdapter(existingThread));
       return { sender: threadSender, threadSessionKey: sessionId };
     },
@@ -246,6 +261,7 @@ export async function createClaudeCodeBot(config: BotConfig) {
         }
       },
       sessionThreads: sessionThreadCallbacks,
+      setActiveTurnChannel,
     },
     {
       getController: () => claudeController,
@@ -297,6 +313,9 @@ export async function createClaudeCodeBot(config: BotConfig) {
     // channel/thread the message arrived in, so replies land there — including
     // resumed threads after a restart (fixes replies leaking to the main channel).
     onNaturalMessage: async (ctx, prompt, channelId, channel) => {
+      // Bind AskUser/permission prompts to this exact channel/thread too — not
+      // just the streaming sender — so they don't leak to another thread.
+      setActiveTurnChannel(channel);
       // deno-lint-ignore no-explicit-any
       const sender = createClaudeSender(createChannelSenderAdapter(channel as any));
       await allHandlers.claude.onClaude(ctx, prompt, channelId, undefined, sender);
@@ -316,6 +335,7 @@ export async function createClaudeCodeBot(config: BotConfig) {
           ].join("\n");
 
           // Create a sender bound to the alert thread, not the bot's main channel
+          setActiveTurnChannel(thread); // any AskUser/permission prompts go here too
           const threadSender = createClaudeSender(createChannelSenderAdapter(thread));
 
           const controller = new AbortController();
@@ -370,24 +390,12 @@ export async function createClaudeCodeBot(config: BotConfig) {
   // Create Discord sender for Claude messages
   claudeSender = createClaudeSender(createDiscordSenderAdapter(bot));
 
-  // Helper: resolve the target channel for the currently active session.
-  // If there's an active session thread, use that; otherwise fall back to main channel.
-  const getActiveSessionChannel = () => {
-    // Try to find the thread for the current session
-    if (claudeSessionId) {
-      const thread = sessionThreadManager.getThread(claudeSessionId);
-      if (thread) return thread;
-    }
-    // Also check for any pending (placeholder-keyed) threads
-    const allThreads = sessionThreadManager.getAllSessionThreads();
-    for (const meta of allThreads) {
-      if (meta.sessionId.startsWith('pending_')) {
-        const thread = sessionThreadManager.getThread(meta.sessionId);
-        if (thread) return thread;
-      }
-    }
-    return bot.getChannel();
-  };
+  // Helper: resolve the target channel for the currently active turn — where
+  // AskUserQuestion prompts and permission Allow/Deny buttons should be sent.
+  // This is the exact channel/thread the in-flight turn streams to (set by each
+  // turn's entry point), so prompts always land in the thread the request came
+  // from. Falls back to the main channel when no turn is active.
+  const getActiveSessionChannel = () => activeTurn.channel ?? bot.getChannel();
 
   // Initialize AskUserQuestion handler — sends questions to Discord, waits for button clicks
   askUserState.handler = createAskUserDiscordHandler(bot, getActiveSessionChannel);
