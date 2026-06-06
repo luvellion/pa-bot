@@ -89,6 +89,77 @@ function convertMessageContent(content: MessageContent): any {
   return payload;
 }
 
+const ATTACHMENTS_DIR = ".attachments";
+const MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024; // 10 MB
+
+/**
+ * Download Discord message attachments to disk so Claude Code can read them
+ * with its file tools. Returns an array of saved file paths.
+ */
+async function downloadAttachments(
+  message: Message,
+  workDir: string,
+): Promise<{ name: string; path: string }[]> {
+  if (!message.attachments.size) return [];
+
+  const dir = `${workDir}/${ATTACHMENTS_DIR}`;
+  await Deno.mkdir(dir, { recursive: true });
+
+  const saved: { name: string; path: string }[] = [];
+
+  for (const att of message.attachments.values()) {
+    if (att.size > MAX_ATTACHMENT_SIZE) {
+      console.warn(`[Attachments] Skipping ${att.name} — exceeds ${MAX_ATTACHMENT_SIZE / 1024 / 1024} MB`);
+      continue;
+    }
+
+    try {
+      const res = await fetch(att.url);
+      if (!res.ok) {
+        console.warn(`[Attachments] Failed to download ${att.name}: ${res.status}`);
+        continue;
+      }
+
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      const prefix = crypto.randomUUID().slice(0, 8);
+      const filename = `${prefix}-${att.name ?? "file"}`;
+      const filePath = `${dir}/${filename}`;
+      await Deno.writeFile(filePath, bytes);
+      saved.push({ name: att.name ?? "file", path: filePath });
+    } catch (err) {
+      console.error(`[Attachments] Error downloading ${att.name}:`, err);
+    }
+  }
+
+  return saved;
+}
+
+/**
+ * Build a prompt that includes information about downloaded attachments.
+ * If the user sent text too, it's prepended.
+ */
+function buildPromptWithAttachments(
+  textContent: string,
+  attachments: { name: string; path: string }[],
+): string {
+  const parts: string[] = [];
+
+  if (textContent) {
+    parts.push(textContent);
+  }
+
+  if (attachments.length > 0) {
+    const fileList = attachments
+      .map((a) => `- ${a.path}`)
+      .join("\n");
+    parts.push(
+      `The user attached the following files. Read them to understand the full message:\n${fileList}`,
+    );
+  }
+
+  return parts.join("\n\n");
+}
+
 // ================================
 // Main Bot Creation Function
 // ================================
@@ -350,14 +421,26 @@ export async function createDiscordBot(
         const unanswered = ordered.slice(lastBotIdx + 1).filter((m) =>
           !m.author.bot &&
           m.author.id !== client.user?.id &&
-          m.content?.trim() &&
+          (m.content?.trim() || m.attachments.size > 0) &&
           (Date.now() - m.createdTimestamp) < MAX_AGE_MS
         );
         if (unanswered.length === 0) continue;
 
         const ctx = createMessageContext(unanswered[unanswered.length - 1]);
         if (!hasPermission(ctx)) continue;
-        const prompt = unanswered.map((m) => m.content.trim()).join("\n");
+
+        // Build combined prompt, downloading any attachments to disk
+        const promptParts: string[] = [];
+        for (const m of unanswered) {
+          const text = m.content?.trim() ?? "";
+          if (m.attachments.size > 0) {
+            const saved = await downloadAttachments(m, workDir);
+            promptParts.push(buildPromptWithAttachments(text, saved));
+          } else if (text) {
+            promptParts.push(text);
+          }
+        }
+        const prompt = promptParts.join("\n");
         console.log(`[Catch-up] Handling ${unanswered.length} missed message(s) in channel ${ch.id}`);
         await dependencies.onNaturalMessage(ctx, prompt, ch.id, ch);
       } catch (error) {
@@ -685,8 +768,9 @@ export async function createDiscordBot(
   if (dependencies.onNaturalMessage) {
     client.on(Events.MessageCreate, async (message: Message) => {
       if (message.author.bot || message.author.id === client.user?.id) return;
-      const content = message.content?.trim();
-      if (!content) return;                       // ignore empty / attachment-only
+      const content = message.content?.trim() ?? "";
+      const hasAttachments = message.attachments.size > 0;
+      if (!content && !hasAttachments) return;     // ignore truly empty messages
       if (!isOurChannel(message.channelId)) return;
 
       const ctx = createMessageContext(message);
@@ -696,7 +780,12 @@ export async function createDiscordBot(
       }
 
       try {
-        await dependencies.onNaturalMessage!(ctx, content, message.channelId, message.channel);
+        let prompt = content;
+        if (hasAttachments) {
+          const saved = await downloadAttachments(message, workDir);
+          prompt = buildPromptWithAttachments(content, saved);
+        }
+        await dependencies.onNaturalMessage!(ctx, prompt, message.channelId, message.channel);
       } catch (error) {
         console.error("Error handling natural message:", error);
       }
