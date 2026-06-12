@@ -39,6 +39,7 @@ import { THINKING_MODES, OPERATION_MODES, EFFORT_LEVELS } from "../settings/inde
 
 import type { ShellManager } from "../shell/index.ts";
 import type { WorktreeBotManager } from "../git/index.ts";
+import type { WorktreeManager } from "../git/worktree-manager.ts";
 import type { ProcessCrashHandler, ProcessHealthMonitor } from "../process/index.ts";
 
 // ================================
@@ -192,6 +193,8 @@ export interface HandlerRegistryDeps {
    *  permission prompts are routed there instead of an unrelated thread. */
   // deno-lint-ignore no-explicit-any
   setActiveTurnChannel?: (channel: any) => void;
+  /** WorktreeManager for per-session git worktree isolation (optional). */
+  worktreeManager?: WorktreeManager;
 }
 
 /**
@@ -556,6 +559,7 @@ export function createAllHandlers(
     getQueryOptions,
     sessionThreads: deps.sessionThreads,
     setActiveTurnChannel: deps.setActiveTurnChannel,
+    worktreeManager: deps.worktreeManager,
   });
 
   const gitHandlers = createGitHandlers({
