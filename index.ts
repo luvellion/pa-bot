@@ -22,7 +22,7 @@ import {
 import type { TextChannel, ThreadChannel } from "npm:discord.js@14.14.1";
 import { getSessionThreadsManager } from "./util/persistence.ts";
 
-import { getGitInfo } from "./git/index.ts";
+import { getGitInfo, WorktreeManager } from "./git/index.ts";
 import { createClaudeSender, expandableContent, sendToClaudeCode, convertToClaudeMessages, type DiscordSender, type ClaudeMessage, type SessionThreadCallbacks } from "./claude/index.ts";
 import { buildQuestionMessages, parseAskUserButtonId, parseAskUserConfirmId, type AskUserQuestionInput } from "./claude/index.ts";
 import { buildPermissionEmbed, parsePermissionButtonId, type PermissionRequestCallback } from "./claude/index.ts";
@@ -115,6 +115,17 @@ export async function createClaudeCodeBot(config: BotConfig) {
   });
 
   const { shellManager, worktreeBotManager, crashHandler, healthMonitor, claudeSessionManager } = managers;
+
+  // WorktreeManager — per-session git worktree isolation for the knowledge base.
+  // Each Claude session gets its own worktree so concurrent sessions (interactive,
+  // cron, monitor) don't interfere with each other's git state. Falls back to
+  // workDir if worktree creation fails.
+  const worktreeManager = new WorktreeManager(workDir);
+  // Clean up any orphaned worktrees from a previous bot instance (crash recovery).
+  // Runs async — handlers won't be ready until channelSessionsReady anyway.
+  const worktreeCleanup = worktreeManager.cleanupOrphaned().catch((err) => {
+    console.error("[WorktreeManager] Startup cleanup failed:", err instanceof Error ? err.message : err);
+  });
 
   // Initialize dynamic model fetching (uses ANTHROPIC_API_KEY if available)
   initModels();
@@ -291,6 +302,7 @@ export async function createClaudeCodeBot(config: BotConfig) {
       },
       sessionThreads: sessionThreadCallbacks,
       setActiveTurnChannel,
+      worktreeManager,
     },
     {
       getController: () => claudeController,
@@ -367,21 +379,28 @@ export async function createClaudeCodeBot(config: BotConfig) {
           setActiveTurnChannel(thread); // any AskUser/permission prompts go here too
           const threadSender = createClaudeSender(createChannelSenderAdapter(thread));
 
+          const monitorId = `monitor-${Date.now()}`;
+          const monitorWorkDir = await worktreeManager.acquire(monitorId);
           const controller = new AbortController();
-          await sendToClaudeCode(
-            workDir,
-            prompt,
-            controller,
-            undefined,
-            undefined,
-            (jsonData) => {
-              const claudeMessages = convertToClaudeMessages(jsonData);
-              if (claudeMessages.length > 0) {
-                threadSender(claudeMessages).catch(() => {});
-              }
-            },
-            false,
-          );
+          try {
+            await sendToClaudeCode(
+              monitorWorkDir,
+              prompt,
+              controller,
+              undefined,
+              undefined,
+              (jsonData) => {
+                const claudeMessages = convertToClaudeMessages(jsonData);
+                if (claudeMessages.length > 0) {
+                  threadSender(claudeMessages).catch(() => {});
+                }
+              },
+              false,
+            );
+            await worktreeManager.release(monitorId);
+          } catch {
+            worktreeManager.release(monitorId).catch(() => {});
+          }
         },
       },
     }),
@@ -406,6 +425,10 @@ export async function createClaudeCodeBot(config: BotConfig) {
       console.error("[Leader] Election unavailable, proceeding as singleton:", err instanceof Error ? err.message : err);
     }
   }
+
+  // Ensure orphaned worktrees are merged back before the bot starts handling
+  // messages. Otherwise a new session could race with orphan cleanup on main.
+  await worktreeCleanup;
 
   // Ensure the persisted channel→session map is loaded before the bot starts
   // handling messages. Otherwise an early message (common right after a restart)
@@ -449,18 +472,22 @@ export async function createClaudeCodeBot(config: BotConfig) {
       if (!task) return new Response("missing task\n", { status: 400 });
       // Run async so the CronJob's curl returns immediately.
       (async () => {
+        const triggerId = `trigger-${Date.now()}`;
         try {
           const channel = body.channel ? await bot.getOrCreateChannel(body.channel) : bot.getChannel();
           if (!channel) { console.error("[Trigger] no target channel"); return; }
           const sender = createClaudeSender(createChannelSenderAdapter(channel));
           const controller = new AbortController();
+          // Acquire a dedicated worktree for this trigger so it doesn't conflict
+          // with any interactive session's git state.
+          const triggerWorkDir = await worktreeManager.acquire(triggerId);
           // Scheduled tasks run unattended: no human to approve tool use, so use
           // bypassPermissions (these are trusted, declarative jobs gated by the
           // trigger token). Don't stream — post only the final result so the
           // channel gets one clean message, not the agent's intermediate narration
           // or step/permission noise.
           const result = await sendToClaudeCode(
-            workDir, task, controller,
+            triggerWorkDir, task, controller,
             undefined, // sessionId
             undefined, // onChunk
             undefined, // onStreamJson (omitted → result.response is the final message)
@@ -469,8 +496,12 @@ export async function createClaudeCodeBot(config: BotConfig) {
           );
           const text = (result.response || "").trim();
           if (text) await sender([{ type: "text", content: text }]);
+          // Commit and merge trigger worktree back to main
+          await worktreeManager.release(triggerId);
         } catch (err) {
           console.error("[Trigger] task failed:", err instanceof Error ? err.message : err);
+          // Best-effort release of trigger worktree on error
+          worktreeManager.release(triggerId).catch(() => {});
         }
       })();
       console.log(`[Trigger] queued task → ${body.channel ?? "main"}: ${task.slice(0, 80)}`);
@@ -534,6 +565,7 @@ export async function createClaudeCodeBot(config: BotConfig) {
     repoName,
     branchName,
     cleanupInterval,
+    worktreeManager,
     // deno-lint-ignore no-explicit-any
     bot: bot as any,
   });
@@ -832,10 +864,11 @@ function setupSignalHandlers(ctx: {
   repoName: string;
   branchName: string;
   cleanupInterval: ReturnType<typeof setInterval>;
+  worktreeManager?: WorktreeManager;
   // deno-lint-ignore no-explicit-any
   bot: any;
 }) {
-  const { managers, allHandlers, getClaudeController, claudeSender, actualCategoryName, repoName, branchName, cleanupInterval, bot } = ctx;
+  const { managers, allHandlers, getClaudeController, claudeSender, actualCategoryName, repoName, branchName, cleanupInterval, worktreeManager: _wtm, bot } = ctx;
   const { crashHandler, healthMonitor } = managers;
   const { shell: shellHandlers, git: gitHandlers } = allHandlers;
 

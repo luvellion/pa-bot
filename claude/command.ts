@@ -99,10 +99,33 @@ export interface ClaudeHandlerDeps {
    *  channel; the sessionThreads callbacks set it to a thread when one is used. */
   // deno-lint-ignore no-explicit-any
   setActiveTurnChannel?: (channel: any) => void;
+  /** WorktreeManager for per-session git worktree isolation (optional). */
+  worktreeManager?: import("../git/worktree-manager.ts").WorktreeManager;
 }
 
 export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
   const { workDir, sendClaudeMessages } = deps;
+
+  /** Resolve the working directory for a session — uses a worktree if available. */
+  async function resolveWorkDir(channelId: string): Promise<string> {
+    if (!deps.worktreeManager) return workDir;
+    try {
+      return await deps.worktreeManager.acquire(channelId);
+    } catch (err) {
+      console.warn("[Worktree] Failed to acquire, falling back to main:", err instanceof Error ? err.message : err);
+      return workDir;
+    }
+  }
+
+  /** Commit worktree state after a turn (crash-safe backup). */
+  async function commitAfterTurn(channelId: string): Promise<void> {
+    if (!deps.worktreeManager) return;
+    try {
+      await deps.worktreeManager.commitWorktree(channelId);
+    } catch (err) {
+      console.warn("[Worktree] Post-turn commit failed:", err instanceof Error ? err.message : err);
+    }
+  }
 
   return {
     /**
@@ -126,6 +149,9 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
       // 2) Active session in this channel/thread → resume that
       // 3) None → start a new session
       const activeSessionId = explicitSessionId || deps.getSessionForChannel(channelId);
+
+      // Resolve worktree-isolated working directory for this channel
+      const sessionWorkDir = await resolveWorkDir(channelId);
 
       // Pick the right sender. An explicit overrideSender (e.g. from a natural
       // message) targets the exact channel/thread the request arrived in — robust
@@ -162,7 +188,7 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
       });
 
       const result = await sendToClaudeCode(
-        workDir,
+        sessionWorkDir,
         prompt,
         controller,
         activeSessionId, // resume if present, new session if undefined
@@ -184,6 +210,9 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
         false,
         deps.getQueryOptions?.()
       );
+
+      // Commit worktree changes after the turn (crash-safe backup)
+      await commitAfterTurn(channelId);
 
       // Track session per-channel and globally
       if (result.sessionId) {
@@ -230,6 +259,10 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
         }
       }
 
+      // Resolve worktree for the thread channel (or generate a temporary ID)
+      const wtId = threadChannelId || `thread-${Date.now()}`;
+      const sessionWorkDir = await resolveWorkDir(wtId);
+
       await ctx.editReply({
         embeds: [{
           color: 0xffff00,
@@ -243,7 +276,7 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
       });
 
       const result = await sendToClaudeCode(
-        workDir,
+        sessionWorkDir,
         prompt,
         controller,
         undefined, // always a new session
@@ -264,6 +297,9 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
         false,
         deps.getQueryOptions?.()
       );
+
+      // Commit worktree after turn
+      await commitAfterTurn(wtId);
 
       deps.setClaudeSessionId(result.sessionId);
       deps.setClaudeController(null);
@@ -375,7 +411,7 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
     /**
      * /clear — reset this channel/thread's session so the next message starts a
      * fresh conversation (Claude's transcript stays on disk; we just stop
-     * resuming it for this channel).
+     * resuming it for this channel). Also merges and releases the worktree.
      */
     onClear(channelId: string): void {
       const existing = deps.getClaudeController();
@@ -383,6 +419,12 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
       deps.setClaudeController(null);
       deps.setSessionForChannel(channelId, undefined);
       deps.setClaudeSessionId(undefined);
+      // Release worktree asynchronously (merge changes back to main)
+      if (deps.worktreeManager?.has(channelId)) {
+        deps.worktreeManager.release(channelId).catch((err) => {
+          console.warn("[Worktree] Release on clear failed:", err instanceof Error ? err.message : err);
+        });
+      }
     }
   };
 }
